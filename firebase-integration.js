@@ -1,0 +1,746 @@
+/* AgriSetu Firebase Authentication + Realtime Database live monitoring.
+ * This file is loaded after app.js so the existing portal pages and workflows
+ * remain in place. Firebase user permissions are read from admin-managed
+ * /userAccess/{uid}; the browser cannot grant itself a role or facility.
+ */
+(function () {
+  "use strict";
+
+  const config = window.AGRISETU_FIREBASE_CONFIG || {};
+  const configReady = !!(
+    window.firebase &&
+    [config.apiKey, config.authDomain, config.databaseURL, config.projectId,
+      config.messagingSenderId, config.appId].every(value =>
+        typeof value === "string" && value.length > 0 &&
+        !value.includes("REPLACE_") && !value.includes("YOUR_")
+      )
+  );
+
+  let auth = null;
+  let db = null;
+  let suppressSignOutPageReset = false;
+  let registrationInProgress = false;
+  let activeSensorListeners = {};
+  let sensorHistoryCache = {};
+  let firebaseNotice = "";
+
+  state.firebaseUser = null;
+  state.firebaseAccess = null;
+  state.monitoringAccess = {};
+  state.firebaseStorageBookings = {};
+  state.firebaseReady = false;
+  state.selectedFirebaseFacilityId = state.selectedFirebaseFacilityId || "";
+  // Disable the old localStorage-only session. Firebase Auth is authoritative.
+  state.loggedIn = false;
+  sessionStorage.removeItem("agrisetuSession");
+
+  function showLoginMessage(message, isError = true) {
+    firebaseNotice = message || "";
+    const target = document.getElementById("loginError");
+    if (target) {
+      target.innerHTML = message
+        ? `<div class="${isError ? "error" : "notice"}">${escapeHtml(message)}</div>`
+        : "";
+    }
+  }
+
+  function firebaseErrorMessage(error) {
+    const code = error && error.code ? error.code : "";
+    const messages = {
+      "auth/invalid-credential": "Incorrect email or password.",
+      "auth/user-not-found": "No Firebase account exists for this email. Register first.",
+      "auth/wrong-password": "Incorrect email or password.",
+      "auth/email-already-in-use": "This email already has a Firebase account. Log in instead.",
+      "auth/weak-password": "Use a password with at least 6 characters.",
+      "auth/invalid-email": "Enter a valid email address.",
+      "auth/network-request-failed": "Network error. Check your internet connection and try again.",
+      "PERMISSION_DENIED": "Firebase denied this request. Check the deployed Realtime Database Security Rules and UID access mapping."
+    };
+    return messages[code] || (error && error.message) || "Firebase authentication failed.";
+  }
+
+  function facilityMap() {
+    return window.AGRISETU_FACILITIES || {};
+  }
+
+  // Cross-device booking registration and monitoring authorization use only
+  // Realtime Database + Security Rules. No Cloud Functions / Blaze plan needed.
+  let storageBookingsRef = null;
+  let monitoringAccessRef = null;
+  const farmerBookingRefs = {};
+
+  function normalizeFacilityKey(value) {
+    return String(value || "").trim().toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+  }
+
+  function resolveFacilityId(storageOrBooking) {
+    const value = typeof storageOrBooking === "string"
+      ? { storage: storageOrBooking }
+      : (storageOrBooking || {});
+    const storageName = normalizeFacilityKey(value.storage || value.storageName || value.name);
+    const storageId = normalizeFacilityKey(value.storageId || "");
+    for (const [facilityId, info] of Object.entries(facilityMap())) {
+      const key = normalizeFacilityKey(info.storageKey || "");
+      const name = normalizeFacilityKey(info.name || "");
+      if ((storageId && (storageId === key || storageId === name)) ||
+          (storageName && (storageName === name || storageName === key))) {
+        return facilityId;
+      }
+    }
+    return "";
+  }
+
+  window.resolveMonitoringFacilityId = resolveFacilityId;
+
+  function firebaseBookingRecord(booking, facilityId) {
+    const user = auth && auth.currentUser;
+    return {
+      id: String(booking.id || ""),
+      farmerUid: user ? user.uid : String(booking.farmerUid || ""),
+      farmerEmail: String((user && user.email) || booking.farmerUser || "").toLowerCase(),
+      farmerName: String(booking.farmerName || booking.farmerUser || "Farmer").slice(0, 100),
+      facilityId,
+      storage: String(booking.storage || "").slice(0, 120),
+      storageId: String(booking.storageId || "").slice(0, 120),
+      storageOwnerEmail: String(booking.storageOwnerEmail || "").toLowerCase().slice(0, 254),
+      storageLocation: String(booking.storageLocation || "").slice(0, 120),
+      product: String(booking.product || "Produce").slice(0, 100),
+      batchId: String(booking.batchId || "").slice(0, 100),
+      quantity: Number(booking.quantity || 0),
+      createdAt: Number(booking.createdAt || Date.now()),
+      status: "PENDING"
+    };
+  }
+
+  window.createMonitoringBooking = async function (booking) {
+    if (!db || !auth || !auth.currentUser || state.role !== "Farmer") {
+      throw new Error("Sign in with an approved Farmer account before creating a booking.");
+    }
+    const facilityId = resolveFacilityId(booking);
+    if (!facilityId) {
+      throw new Error(`No Firebase facility ID is configured for ${booking.storage || "this cold storage"}. Add it to firebase-config.js first.`);
+    }
+    const record = firebaseBookingRecord(booking, facilityId);
+    if (!record.id || !record.farmerUid || !record.batchId || record.quantity <= 0) {
+      throw new Error("Booking data is incomplete; the booking was not synchronized.");
+    }
+    booking.facilityId = facilityId;
+    const ref = db.ref(`storageBookings/${facilityId}/${record.id}`);
+    await ref.set(record);
+    listenToFarmerBooking(record.id, facilityId);
+    return { facilityId, bookingId: record.id };
+  };
+
+  window.acceptMonitoringBooking = async function (booking) {
+    if (!db || !auth || !auth.currentUser || state.role !== "Cold Storage") {
+      throw new Error("Only a signed-in Cold Storage operator can accept a booking.");
+    }
+    const facilityId = booking.facilityId || resolveFacilityId(booking);
+    const assignedFacility = state.firebaseAccess && state.firebaseAccess.facilityId;
+    if (!facilityId || assignedFacility !== facilityId) {
+      throw new Error("This cold-storage account is not assigned to the booking's facility.");
+    }
+    const bookingId = String(booking.id || "");
+    const ref = db.ref(`storageBookings/${facilityId}/${bookingId}`);
+    const snap = await ref.once("value");
+    const remote = snap.val();
+    if (!remote || !remote.farmerUid || remote.facilityId !== facilityId) {
+      throw new Error("The shared Firebase booking was not found. Ask the farmer to recreate the booking while online.");
+    }
+    if (remote.status !== "PENDING" && !(remote.status === "ACCEPTED" && remote.acceptedBy === auth.currentUser.uid)) {
+      throw new Error(`This booking is already ${String(remote.status || "unavailable").toLowerCase()}.`);
+    }
+
+    const now = Date.now();
+    await ref.update({ status: "ACCEPTED", acceptedAt: remote.acceptedAt || now, acceptedBy: auth.currentUser.uid });
+    // Rules verify that this accepted booking belongs to this farmer and that
+    // the caller is the operator assigned to this exact facility.
+    await db.ref(`monitoringAccess/${remote.farmerUid}/facilityIds/${facilityId}`).set({
+      enabled: true,
+      bookingId,
+      grantedAt: now
+    });
+    return { facilityId, farmerUid: remote.farmerUid };
+  };
+
+  window.rejectMonitoringBooking = async function (booking) {
+    if (!db || !auth || !auth.currentUser || state.role !== "Cold Storage") {
+      throw new Error("Only a signed-in Cold Storage operator can reject a booking.");
+    }
+    const facilityId = booking.facilityId || resolveFacilityId(booking);
+    if (!facilityId || state.firebaseAccess?.facilityId !== facilityId) {
+      throw new Error("This cold-storage account is not assigned to the booking's facility.");
+    }
+    const ref = db.ref(`storageBookings/${facilityId}/${String(booking.id || "")}`);
+    const snap = await ref.once("value");
+    const remote = snap.val();
+    if (!remote || remote.status !== "PENDING") throw new Error("Only a pending shared booking can be rejected.");
+    await ref.update({ status: "REJECTED", rejectedAt: Date.now(), rejectedBy: auth.currentUser.uid });
+  };
+
+  function mergeRemoteStorageBookings(snapshot) {
+    const local = typeof globalBookings === "function" ? globalBookings() : [];
+    const byId = new Map(local.map(item => [String(item.id), item]));
+    const remoteList = [];
+    snapshot.forEach(child => {
+      const remote = child.val();
+      if (!remote || !remote.id) return;
+      const existing = byId.get(String(remote.id)) || {};
+      const merged = {
+        ...existing,
+        ...remote,
+        farmerUser: remote.farmerEmail || existing.farmerUser || "",
+        storageAccepted: remote.status === "ACCEPTED",
+        acceptedAt: remote.acceptedAt || existing.acceptedAt,
+        facilityId: remote.facilityId
+      };
+      byId.set(String(remote.id), merged);
+      remoteList.push(merged);
+    });
+    if (typeof writeGlobalBookings === "function") writeGlobalBookings([...byId.values()]);
+    state.firebaseStorageBookings = Object.fromEntries(remoteList.map(item => [item.id, item]));
+    if (state.page === "requests" || state.page === "monitor" || state.page === "dashboard") render();
+  }
+
+  function attachStorageBookingListener(facilityId) {
+    if (storageBookingsRef) storageBookingsRef.off();
+    storageBookingsRef = null;
+    if (!db || !facilityId || state.role !== "Cold Storage") return;
+    storageBookingsRef = db.ref(`storageBookings/${facilityId}`);
+    storageBookingsRef.on("value", mergeRemoteStorageBookings, error => {
+      console.error("Shared booking listener:", error);
+    });
+  }
+
+  function updateFarmerLocalBooking(remote) {
+    if (!remote || !remote.id) return;
+    const bookings = readStore("bookings", []);
+    const index = bookings.findIndex(item => String(item.id) === String(remote.id));
+    if (index < 0) return;
+    bookings[index] = {
+      ...bookings[index],
+      status: remote.status || bookings[index].status,
+      storageAccepted: remote.status === "ACCEPTED",
+      acceptedAt: remote.acceptedAt || bookings[index].acceptedAt,
+      facilityId: remote.facilityId
+    };
+    writeStore("bookings", bookings);
+    const products = readStore("products", []);
+    const product = products.find(item => item.batchId === remote.batchId);
+    if (product) {
+      product.storageAccepted = remote.status === "ACCEPTED";
+      product.storage = remote.storage || product.storage;
+      product.storageId = remote.storageId || product.storageId;
+      product.facilityId = remote.facilityId;
+    }
+    writeStore("products", products);
+    if (state.page === "monitor" || state.page === "storage" || state.page === "dashboard") render();
+  }
+
+  function listenToFarmerBooking(bookingId, facilityId) {
+    if (!db || !auth || !auth.currentUser) return;
+    const key = `${facilityId}/${bookingId}`;
+    if (farmerBookingRefs[key]) return;
+    const ref = db.ref(`storageBookings/${key}`);
+    const callback = snapshot => updateFarmerLocalBooking(snapshot.val());
+    farmerBookingRefs[key] = { ref, callback };
+    ref.on("value", callback, error => console.warn("Farmer booking status listener:", error));
+  }
+
+  function attachFarmerBookingListeners() {
+    Object.values(farmerBookingRefs).forEach(item => item.ref.off("value", item.callback));
+    Object.keys(farmerBookingRefs).forEach(key => delete farmerBookingRefs[key]);
+    if (state.role !== "Farmer" || !auth || !auth.currentUser) return;
+    const bookings = readStore("bookings", []);
+    bookings.forEach(booking => {
+      const facilityId = booking.facilityId || resolveFacilityId(booking);
+      if (facilityId && booking.id) listenToFarmerBooking(booking.id, facilityId);
+    });
+  }
+
+  function detachAuthorizationListeners() {
+    if (storageBookingsRef) storageBookingsRef.off();
+    if (monitoringAccessRef) monitoringAccessRef.off();
+    storageBookingsRef = null;
+    monitoringAccessRef = null;
+    Object.values(farmerBookingRefs).forEach(item => item.ref.off("value", item.callback));
+    Object.keys(farmerBookingRefs).forEach(key => delete farmerBookingRefs[key]);
+  }
+
+  function allowedFarmerFacilities() {
+    const legacy = (state.firebaseAccess && state.firebaseAccess.facilityIds) || {};
+    const bookingGrants = (state.monitoringAccess && state.monitoringAccess.facilityIds) || {};
+    const ids = new Set([
+      ...Object.keys(legacy).filter(id => legacy[id] === true),
+      ...Object.keys(bookingGrants).filter(id => bookingGrants[id] && bookingGrants[id].enabled === true)
+    ]);
+    return [...ids].filter(id => facilityMap()[id]).map(id => ({ id, ...facilityMap()[id] }));
+  }
+
+  function currentFacilityIds() {
+    if (!state.firebaseAccess) return [];
+    if (state.role === "Cold Storage") {
+      const id = state.firebaseAccess.facilityId;
+      return id && facilityMap()[id] ? [id] : [];
+    }
+    if (state.role === "Farmer") {
+      const options = allowedFarmerFacilities();
+      if (!options.length) return [];
+      const selected = options.find(x => x.id === state.selectedFirebaseFacilityId);
+      return [selected ? selected.id : options[0].id];
+    }
+    return [];
+  }
+
+  function escId(value) {
+    return String(value || "").replace(/[^a-zA-Z0-9_-]/g, "_");
+  }
+
+  function sensorCardHtml(facilityId) {
+    const info = facilityMap()[facilityId] || { name: facilityId, location: "" };
+    const chartKey = `FACILITY_${facilityId}`;
+    const suffix = escId(facilityId);
+    return `
+      <section class="card firebase-sensor-card" data-firebase-facility="${escapeAttr(facilityId)}">
+        <div class="section-header">
+          <div>
+            <h2>Live Facility Sensors</h2>
+            <p class="muted">${escapeHtml(info.name)}${info.location ? ` · ${escapeHtml(info.location)}` : ""} · ${escapeHtml(facilityId)}</p>
+          </div>
+          <span class="pill" id="firebase-sensor-status-${suffix}">Connecting…</span>
+        </div>
+        <div class="firebase-sensor-values">
+          <div><span>Temperature · DHT22</span><b id="firebase-temperature-${suffix}">—</b></div>
+          <div><span>Humidity · DHT22</span><b id="firebase-humidity-${suffix}">—</b></div>
+          <div><span>Methane estimate · MQ-5</span><b id="firebase-methane-${suffix}">—</b></div>
+          <div><span>Last received</span><b id="firebase-updated-${suffix}">Waiting for ESP32</b></div>
+        </div>
+        <div class="section-header" style="margin-top:22px"><div><h3>Sensor History</h3><p class="muted">Stored samples from Firebase Realtime Database</p></div></div>
+        <div class="dashboard-trends full" id="firebase-history-trends-${suffix}">
+          ${monitoringMetricCard("Temperature", "DHT22 sensor", chartKey, "temperature", "°C", "temp")}
+          ${monitoringMetricCard("Humidity", "DHT22 sensor", chartKey, "humidity", "%", "hum")}
+          ${monitoringMetricCard("Methane", "MQ-5 gas sensor", chartKey, "methane", " ppm", "co2")}
+        </div>
+        <p class="muted firebase-sensor-footnote">Live values update from the ESP32. History is recorded approximately once per minute.</p>
+      </section>`;
+  }
+
+  function updateLatestSensorCard(facilityId, reading) {
+    const suffix = escId(facilityId);
+    const setText = (id, value) => {
+      const element = document.getElementById(id);
+      if (element) element.textContent = value;
+    };
+    if (!reading) {
+      setText(`firebase-sensor-status-${suffix}`, "Waiting for data");
+      setText(`firebase-updated-${suffix}`, "No ESP32 reading received yet");
+      return;
+    }
+    const temperature = Number(reading.temperature);
+    const humidity = Number(reading.humidity);
+    const methane = Number(reading.methane_ppm);
+    if (![temperature, humidity, methane].every(Number.isFinite)) return;
+
+    setText(`firebase-temperature-${suffix}`, `${temperature.toFixed(1)} °C`);
+    setText(`firebase-humidity-${suffix}`, `${humidity.toFixed(1)} %`);
+    setText(`firebase-methane-${suffix}`, `${methane.toFixed(1)} ppm`);
+
+    const receivedAt = Number(reading.received_at || 0);
+    const ageMs = receivedAt ? Date.now() - receivedAt : Number.POSITIVE_INFINITY;
+    const isOnline = ageMs >= 0 && ageMs <= 30000;
+    setText(`firebase-sensor-status-${suffix}`, isOnline ? "ONLINE" : "STALE DATA");
+    setText(`firebase-updated-${suffix}`, receivedAt ? new Date(receivedAt).toLocaleString() : "Timestamp unavailable");
+
+    latestHardwareReading = reading;
+    const stored = state.role === "Cold Storage"
+      ? coldStorageBookings().filter(isAcceptedBooking).map(b => ({ batchId: b.batchId }))
+      : acceptedProducts();
+    stored.forEach(batch => {
+      pushTrend(batch.batchId, "temperature", temperature);
+      pushTrend(batch.batchId, "humidity", humidity);
+      pushTrend(batch.batchId, "methane", methane);
+      const write = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val;
+      };
+      write(`live-temp-${batch.batchId}`, `${temperature.toFixed(1)}°C`);
+      write(`live-hum-${batch.batchId}`, `${humidity.toFixed(1)}%`);
+      write(`live-co2-${batch.batchId}`, `${methane.toFixed(1)} ppm`);
+      const batchCard = [...document.querySelectorAll("[data-monitor-batch]")]
+        .find(el => el.getAttribute("data-monitor-batch") === String(batch.batchId));
+      const trends = batchCard && batchCard.querySelector(".dashboard-trends");
+      if (trends) {
+        trends.innerHTML = `${monitoringMetricCard("Temperature", "DHT22 sensor", batch.batchId, "temperature", "°C", "temp")}${monitoringMetricCard("Humidity", "DHT22 sensor", batch.batchId, "humidity", "%", "hum")}${monitoringMetricCard("Methane", "MQ-5 gas sensor", batch.batchId, "methane", " ppm", "co2")}`;
+      }
+    });
+  }
+
+  function updateHistoryCharts(facilityId, snapshot) {
+    const suffix = escId(facilityId);
+    const chartKey = `FACILITY_${facilityId}`;
+    const records = [];
+    snapshot.forEach(child => {
+      const value = child.val();
+      if (value && Number.isFinite(Number(value.received_at))) records.push(value);
+    });
+    records.sort((a, b) => Number(a.received_at) - Number(b.received_at));
+    const metrics = [
+      ["temperature", "°C"],
+      ["humidity", "%"],
+      ["methane", " ppm"]
+    ];
+    for (const [metric] of metrics) {
+      const sourceField = metric === "methane" ? "methane_ppm" : metric;
+      state.monitorHistory[trendKey(chartKey, metric)] = records
+        .map(row => Number(row[sourceField]))
+        .filter(Number.isFinite)
+        .slice(-60);
+    }
+    const holder = document.getElementById(`firebase-history-trends-${suffix}`);
+    if (holder) {
+      holder.innerHTML = `${monitoringMetricCard("Temperature", "DHT22 sensor", chartKey, "temperature", "°C", "temp")}${monitoringMetricCard("Humidity", "DHT22 sensor", chartKey, "humidity", "%", "hum")}${monitoringMetricCard("Methane", "MQ-5 gas sensor", chartKey, "methane", " ppm", "co2")}`;
+    }
+  }
+
+  function detachSensorListeners() {
+    Object.values(activeSensorListeners).forEach(item => {
+      item.latestRef.off("value", item.latestCallback);
+      item.historyRef.off("value", item.historyCallback);
+    });
+    activeSensorListeners = {};
+  }
+
+  function refreshFirebaseSensorSubscriptions() {
+    if (!db || !state.firebaseUser || !state.firebaseAccess || !state.loggedIn ||
+        !["monitor", "storage", "dashboard"].includes(state.page)) {
+      detachSensorListeners();
+      return;
+    }
+    const wanted = currentFacilityIds();
+    const wantedSet = new Set(wanted);
+    for (const existingId of Object.keys(activeSensorListeners)) {
+      if (!wantedSet.has(existingId)) {
+        const old = activeSensorListeners[existingId];
+        old.latestRef.off("value", old.latestCallback);
+        old.historyRef.off("value", old.historyCallback);
+        delete activeSensorListeners[existingId];
+      }
+    }
+    wanted.forEach(facilityId => {
+      if (activeSensorListeners[facilityId]) return;
+      const latestRef = db.ref(`facilities/${facilityId}/latest`);
+      const historyRef = db.ref(`facilities/${facilityId}/history`).orderByChild("received_at").limitToLast(60);
+      const latestCallback = snapshot => updateLatestSensorCard(facilityId, snapshot.val());
+      const historyCallback = snapshot => updateHistoryCharts(facilityId, snapshot);
+      activeSensorListeners[facilityId] = { latestRef, historyRef, latestCallback, historyCallback };
+      latestRef.on("value", latestCallback, error => {
+        const suffix = escId(facilityId);
+        const status = document.getElementById(`firebase-sensor-status-${suffix}`);
+        if (status) status.textContent = error.message || "ACCESS DENIED";
+        console.error("Firebase latest sensor listener:", error);
+      });
+      historyRef.on("value", historyCallback, error => {
+        console.error("Firebase history listener:", error);
+      });
+    });
+  }
+
+  function farmerMonitoringPage() {
+    const options = allowedFarmerFacilities();
+    const selected = options.find(x => x.id === state.selectedFirebaseFacilityId) || options[0];
+    const stored = acceptedProducts();
+    const batchCards = selected
+      ? stored.filter(item => {
+          const option = Object.entries(facilityMap()).find(([, info]) => info.storageKey === (item.storageId || item.storage));
+          return !option || option[0] === selected.id;
+        }).map(item => `<div class="card monitoring-card" data-monitor-batch="${escapeAttr(item.batchId)}"><div class="section-header"><div><h2>${escapeHtml(item.product || "Stored produce")} · ${escapeHtml(item.batchId)}</h2><p class="muted">${escapeHtml(item.storage || selected.name)} · <span class="live-dot">● Live</span></p></div><span class="pill green">Accepted & Stored</span></div><div class="dashboard-trends full">${monitoringMetricCard("Temperature", "DHT22 sensor", item.batchId, "temperature", "°C", "temp")}${monitoringMetricCard("Humidity", "DHT22 sensor", item.batchId, "humidity", "%", "hum")}${monitoringMetricCard("Methane", "MQ-5 gas sensor", item.batchId, "methane", " ppm", "co2")}</div></div>`).join("")
+      : "";
+
+    return `<div class="page-head"><div class="page-icon">♧</div><div><h1>Storage Monitoring</h1><p>Live temperature, humidity and methane readings from cold storages that have accepted your bookings.</p></div></div>
+      ${options.length ? `<div class="card monitor-storage-picker"><div><h3>Select Cold Storage</h3><p class="muted">A facility appears here automatically after its operator accepts your booking.</p></div><select class="monitor-storage-select large" onchange="selectFirebaseMonitorFacility(this.value)">${options.map(x => `<option value="${escapeAttr(x.id)}" ${selected && x.id === selected.id ? "selected" : ""}>${escapeHtml(x.name)}${x.location ? ` · ${escapeHtml(x.location)}` : ""}</option>`).join("")}</select></div>${sensorCardHtml(selected.id)}${batchCards || `<div class="card empty-state"><h3>No batch details on this browser</h3><p>The live facility sensor feed is available above. Booking status is synchronized through Firebase Realtime Database.</p></div>`}` : `<div class="card empty-state"><h3>No facility access assigned</h3><p>No cold storage has accepted a booking from this account yet. Once a cold-storage operator accepts one of your bookings, that facility will appear here automatically.</p></div>`}`;
+  }
+
+  function coldStorageMonitoringPage() {
+    const facilityId = state.firebaseAccess && state.firebaseAccess.facilityId;
+    const info = facilityMap()[facilityId] || null;
+    const bookings = coldStorageBookings().filter(isAcceptedBooking);
+    const batchCards = bookings.map(b => `<div class="card monitoring-card" data-monitor-batch="${escapeAttr(b.batchId)}"><div class="section-header"><div><h2>${escapeHtml(b.product)} · ${escapeHtml(b.batchId)}</h2><p class="muted">Farmer: ${escapeHtml(b.farmerName || b.farmerUser || "Farmer")} · <span class="live-dot">● Live</span></p></div><span class="pill green">Accepted & Stored</span></div><div class="dashboard-trends full">${monitoringMetricCard("Temperature", "DHT22 sensor", b.batchId, "temperature", "°C", "temp")}${monitoringMetricCard("Humidity", "DHT22 sensor", b.batchId, "humidity", "%", "hum")}${monitoringMetricCard("Methane", "MQ-5 gas sensor", b.batchId, "methane", " ppm", "co2")}</div></div>`).join("");
+
+    return `<div class="page-head"><div class="page-icon">♧</div><div><h1>Cold Storage Monitoring</h1><p>Live environmental conditions for ${escapeHtml((info && info.name) || coldStorageName() || "your facility")}.</p></div></div>
+      ${info ? sensorCardHtml(facilityId) : `<div class="card empty-state"><h3>Facility not linked</h3><p>This cold-storage account has no valid facilityId in its admin-managed Firebase userAccess record.</p></div>`}
+      ${batchCards || `<div class="card empty-state"><h3>No accepted batch details on this browser</h3><p>Facility-level sensor readings are displayed above. Booking requests and acceptance status are synchronized through Firebase Realtime Database.</p></div>`}`;
+  }
+
+  async function activateFirebaseUser(user, access) {
+    const role = access && access.role;
+    const validRoles = ["Farmer", "Cold Storage", "Porter", "Buyer", "Admin"];
+    if (!access || access.active !== true || !validRoles.includes(role)) {
+      firebaseNotice = "Your account is signed in, but an administrator has not approved its AgriSetu role and facility access yet.";
+      state.firebaseUser = null;
+      state.firebaseAccess = null;
+      state.loggedIn = false;
+      state.page = "login";
+      suppressSignOutPageReset = true;
+      await auth.signOut();
+      render();
+      return false;
+    }
+
+    detachAuthorizationListeners();
+    state.firebaseUser = user;
+    state.firebaseAccess = access;
+    state.monitoringAccess = {};
+    state.firebaseReady = true;
+    state.selectedFirebaseFacilityId = state.selectedFirebaseFacilityId || "";
+    state.user = (user.email || "").toLowerCase();
+    state.role = role;
+    state.loggedIn = true;
+    try {
+      if (role === "Farmer") {
+        const accessSnapshot = await db.ref(`monitoringAccess/${user.uid}`).once("value");
+        state.monitoringAccess = accessSnapshot.val() || {};
+        monitoringAccessRef = db.ref(`monitoringAccess/${user.uid}`);
+        monitoringAccessRef.on("value", snapshot => {
+          state.monitoringAccess = snapshot.val() || {};
+          render();
+        }, error => console.warn("Monitoring access listener:", error));
+        attachFarmerBookingListeners();
+      } else if (role === "Cold Storage") {
+        attachStorageBookingListener(access.facilityId || "");
+      }
+    } catch (error) {
+      console.warn("Could not initialize booking monitoring access:", error.message);
+    }
+    sessionStorage.setItem("agrisetuSession", "true");
+    localStorage.setItem("agrisetuUser", state.user);
+    localStorage.setItem(`agrisetuRole_${state.user}`, role);
+
+    let profile = {};
+    try {
+      const snapshot = await db.ref(`profiles/${user.uid}`).once("value");
+      profile = snapshot.val() || {};
+    } catch (error) {
+      console.warn("Could not load Firebase profile:", error.message);
+    }
+    const oldAccount = accountData(state.user);
+    const account = {
+      ...oldAccount,
+      ...profile,
+      email: state.user,
+      role,
+      storageName: access.storageName || profile.storageName || oldAccount.storageName,
+      name: profile.name || oldAccount.name || user.displayName || state.user
+    };
+    localStorage.setItem(`agrisetuAccount_${state.user}`, JSON.stringify(account));
+    if (state.page === "landing" || state.page === "login" || state.page === "register") {
+      state.page = "dashboard";
+    }
+    firebaseNotice = "";
+    render();
+    return true;
+  }
+
+  // Replace the previous localStorage-only login screen with a notice-capable version.
+  const previousLogin = window.login;
+  window.login = function () {
+    let html = typeof previousLogin === "function" ? previousLogin() : "";
+    const notice = firebaseNotice || (!configReady
+      ? "Firebase is not configured yet. Complete firebase-config.js and deploy database.rules.json before logging in."
+      : "Sign in using your Firebase Authentication account.");
+    const banner = `<div class="firebase-auth-help">${escapeHtml(notice)}</div>`;
+    if (html.includes('<div id="loginError"></div>')) {
+      html = html.replace('<div id="loginError"></div>', `<div id="loginError"></div>${banner}`);
+    }
+    return html;
+  };
+
+  window.doLogin = async function () {
+    const email = document.getElementById("email")?.value.trim().toLowerCase();
+    const password = document.getElementById("password")?.value;
+    const errorBox = document.getElementById("loginError");
+    if (!configReady || !auth || !db) {
+      showLoginMessage("Firebase is not configured. Update firebase-config.js first.");
+      return;
+    }
+    if (!email || !password) {
+      showLoginMessage("Please enter your email and password.");
+      return;
+    }
+    try {
+      firebaseNotice = "";
+      if (errorBox) errorBox.innerHTML = "";
+      const credential = await auth.signInWithEmailAndPassword(email, password);
+      const accessSnapshot = await db.ref(`userAccess/${credential.user.uid}`).once("value");
+      const access = accessSnapshot.val();
+      if (!access || access.active !== true) {
+        firebaseNotice = "Your login is valid, but your AgriSetu role/facility access is pending administrator approval.";
+        suppressSignOutPageReset = true;
+        await auth.signOut();
+        state.page = "login";
+        state.loggedIn = false;
+        render();
+        return;
+      }
+      await activateFirebaseUser(credential.user, access);
+    } catch (error) {
+      showLoginMessage(firebaseErrorMessage(error));
+    }
+  };
+
+  window.doRegister = async function () {
+    const name = document.getElementById("registerName")?.value.trim();
+    const phone = document.getElementById("registerPhone")?.value.trim();
+    const email = document.getElementById("registerEmail")?.value.trim().toLowerCase();
+    const password = document.getElementById("registerPassword")?.value;
+    const confirm = document.getElementById("registerConfirm")?.value;
+    const errorBox = document.getElementById("registerError");
+    const storageName = state.role === "Cold Storage"
+      ? (document.getElementById("registerStorageName")?.value || "").trim()
+      : "";
+    const partnerName = state.role === "Porter"
+      ? (document.getElementById("registerPartnerName")?.value || "").trim()
+      : "";
+    if (!configReady || !auth || !db) {
+      if (errorBox) errorBox.innerHTML = '<div class="error">Firebase is not configured. Update firebase-config.js first.</div>';
+      return;
+    }
+    if (!name || !phone || !email || !password || !confirm ||
+        (state.role === "Cold Storage" && !storageName) ||
+        (state.role === "Porter" && !partnerName)) {
+      if (errorBox) errorBox.innerHTML = '<div class="error">Please complete all required fields.</div>';
+      return;
+    }
+    if (password !== confirm || password.length < 6) {
+      if (errorBox) errorBox.innerHTML = '<div class="error">Passwords must match and contain at least 6 characters.</div>';
+      return;
+    }
+    try {
+      registrationInProgress = true;
+      if (errorBox) errorBox.innerHTML = "";
+      const credential = await auth.createUserWithEmailAndPassword(email, password);
+      const uid = credential.user.uid;
+      await credential.user.updateProfile({ displayName: name });
+      const profile = { name, phone, email, roleRequested: state.role, storageName: storageName || null };
+      await db.ref(`profiles/${uid}`).set(profile);
+      await db.ref(`accessRequests/${uid}`).set({
+        requestedRole: state.role,
+        requestedStorageName: storageName || null,
+        status: "PENDING",
+        createdAt: firebase.database.ServerValue.TIMESTAMP
+      });
+      if (state.role === "Porter") {
+        // Store this as a profile detail only; a porter ID can still be generated by the existing portal logic after approval.
+        profile.partnerName = partnerName;
+        await db.ref(`profiles/${uid}`).update({ partnerName });
+      }
+      await auth.signOut();
+      registrationInProgress = false;
+      state.loggedIn = false;
+      state.firebaseUser = null;
+      state.firebaseAccess = null;
+      state.page = "login";
+      firebaseNotice = "Registration submitted. An AgriSetu administrator must approve your requested role and facility before you can enter the portal.";
+      render();
+    } catch (error) {
+      registrationInProgress = false;
+      if (errorBox) errorBox.innerHTML = `<div class="error">${escapeHtml(firebaseErrorMessage(error))}</div>`;
+    }
+  };
+
+  window.logout = async function () {
+    detachSensorListeners();
+    detachAuthorizationListeners();
+    state.monitoringAccess = {};
+    state.firebaseStorageBookings = {};
+    if (auth) {
+      try { await auth.signOut(); } catch (error) { console.error("Firebase sign-out:", error); }
+    }
+    state.firebaseUser = null;
+    state.firebaseAccess = null;
+    state.loggedIn = false;
+    state.page = "landing";
+    localStorage.removeItem("agrisetuUser");
+    sessionStorage.removeItem("agrisetuSession");
+    render();
+  };
+
+  window.monitoringPage = farmerMonitoringPage;
+  window.coldMonitorPage = coldStorageMonitoringPage;
+  window.selectFirebaseMonitorFacility = function (facilityId) {
+    const allowed = allowedFarmerFacilities().some(item => item.id === facilityId);
+    if (!allowed) return;
+    state.selectedFirebaseFacilityId = facilityId;
+    render();
+  };
+  window.selectMonitorStorage = function (storageId) {
+    const option = Object.entries(facilityMap()).find(([, info]) => info.storageKey === storageId);
+    if (option) state.selectedFirebaseFacilityId = option[0];
+    state.selectedMonitorStorageId = storageId;
+    render();
+  };
+
+  // Keep the original renderer and all unrelated workflow pages, but attach/detach
+  // Firebase listeners whenever a user navigates between pages.
+  const originalRender = window.render;
+  window.render = function () {
+    const result = originalRender.apply(this, arguments);
+    refreshFirebaseSensorSubscriptions();
+    return result;
+  };
+  window.refreshLiveMonitoring = refreshFirebaseSensorSubscriptions;
+  const originalNavigate = window.navigate;
+  window.navigate = function (page) {
+    if (!["monitor", "storage", "dashboard"].includes(page)) detachSensorListeners();
+    return originalNavigate.apply(this, arguments);
+  };
+
+  if (!configReady) {
+    state.loggedIn = false;
+    state.page = "login";
+    render();
+    return;
+  }
+
+  try {
+    if (!firebase.apps.length) firebase.initializeApp(config);
+    auth = firebase.auth();
+    db = firebase.database();
+    state.firebaseReady = true;
+
+    auth.onAuthStateChanged(async user => {
+      if (registrationInProgress) return;
+      if (!user) {
+        state.firebaseUser = null;
+        state.firebaseAccess = null;
+        state.loggedIn = false;
+        sessionStorage.removeItem("agrisetuSession");
+        if (suppressSignOutPageReset) {
+          suppressSignOutPageReset = false;
+          state.page = "login";
+        }
+        detachSensorListeners();
+        detachAuthorizationListeners();
+        state.monitoringAccess = {};
+        state.firebaseStorageBookings = {};
+        render();
+        return;
+      }
+      try {
+        const snapshot = await db.ref(`userAccess/${user.uid}`).once("value");
+        await activateFirebaseUser(user, snapshot.val());
+      } catch (error) {
+        console.error("Could not load AgriSetu access record:", error);
+        state.loggedIn = false;
+        state.page = "login";
+        firebaseNotice = "Could not verify your role access. Check the userAccess record and database rules.";
+        render();
+      }
+    });
+  } catch (error) {
+    console.error("Firebase initialization error:", error);
+    firebaseNotice = "Firebase initialization failed. Check firebase-config.js.";
+    state.page = "login";
+    render();
+  }
+})();
