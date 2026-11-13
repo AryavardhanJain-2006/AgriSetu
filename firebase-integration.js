@@ -397,19 +397,12 @@ async function ensureUserAccessRecord(user, preferredRole = null) {
     try {
       firebaseNotice = "";
       if (errorBox) errorBox.innerHTML = "";
-      const credential = await auth.signInWithEmailAndPassword(email, password);
-      const accessSnapshot = await db.ref(`userAccess/${credential.user.uid}`).once("value");
-      const access = accessSnapshot.val();
-      if (!access || access.active !== true) {
-        firebaseNotice = "Your login is valid, but your AgriSetu role/facility access is pending administrator approval.";
-        suppressSignOutPageReset = true;
-        await auth.signOut();
-        state.page = "login";
-        state.loggedIn = false;
-        render();
-        return;
-      }
-      await activateFirebaseUser(credential.user, access);
+      const credential =
+    await auth.signInWithEmailAndPassword(email, password);
+
+const access = await ensureUserAccessRecord(credential.user);
+
+await activateFirebaseUser(credential.user, access);
     } catch (error) {
       showLoginMessage(firebaseErrorMessage(error));
     }
@@ -600,8 +593,8 @@ async function ensureUserAccessRecord(user, preferredRole = null) {
         return;
       }
       try {
-        const snapshot = await db.ref(`userAccess/${user.uid}`).once("value");
-        await activateFirebaseUser(user, snapshot.val());
+        const access = await ensureUserAccessRecord(user);
+        await activateFirebaseUser(user, access);
       } catch (error) {
         console.error("Could not load AgriSetu access record:", error);
         state.loggedIn = false;
