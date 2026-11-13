@@ -218,6 +218,13 @@ function login(){
 
 function registerPage(){
   return `<div class="login-wrap"><div class="login-card"><div class="login-logo"><img src="assets/logo.png"><h1>Agrisetu</h1><p>Bridging Farmers to a Fresher Tomorrow</p></div><div id="registerError"></div><div style="margin-top:25px"><div class="field"><label>Full Name</label><input id="registerName" type="text" placeholder="Enter your name"></div><div class="field" style="margin-top:18px"><label>Phone Number</label><input id="registerPhone" type="tel" placeholder="Enter your phone number"></div><div class="field" style="margin-top:18px"><label>Email</label><input id="registerEmail" type="email" placeholder="Enter your email"></div><div class="field" style="margin-top:18px"><label>Password</label><input id="registerPassword" type="password" placeholder="Create a password"></div><div class="field" style="margin-top:18px"><label>Confirm Password</label><input id="registerConfirm" type="password" placeholder="Confirm your password"></div><div style="margin:22px 0 10px;font-weight:600">Register as</div><div class="role-grid">${["Farmer","Cold Storage","Porter","Buyer"].map(r=>`<button class="role ${state.role===r?"selected":""}" onclick="selectRegisterRole('${r}')">◯ &nbsp;${r}</button>`).join("")}</div>${state.role==="Cold Storage"?`<div class="field" style="margin-top:18px"><label>Cold Storage Name</label><select id="registerStorageName"><option value="">Select your cold storage</option>${storageOptions.map(s=>`<option value="${escapeAttr(s.name)}">${escapeHtml(s.name)}</option>`).join("")}</select><small style="display:block;margin-top:8px;color:var(--muted)">Select the same storage name that farmers use when booking.</small></div>`:""}<button class="btn btn-primary login-submit" onclick="doRegister()">Create account</button><button class="btn btn-outline login-submit" onclick="showLogin()">← Back to login</button></div></div></div>`;
+<div class="field" style="margin-top:18px">
+  <label>Facility Registration Code</label>
+  <input id="registerFacilityCode"
+         type="password"
+         autocomplete="off"
+         placeholder="Enter the code provided for this facility">
+</div>
 }
 
 function shell(content){
