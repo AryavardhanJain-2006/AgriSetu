@@ -5,7 +5,7 @@
  * Access to Realtime Database is enforced by database.rules.json.
  */
 window.AGRISETU_FIREBASE_CONFIG = {
-  apiKey: "AIzaSyBFrKb29RG0m4dMirGHPbfm0DiCXd0g7Gs",
+  apiKey: "AIzaSyBFrKb29RGOm4dMirGHPbfm0DiCXd0g7Gs",
   authDomain: "agrisetu-479fe.firebaseapp.com",
   databaseURL: "https://agrisetu-479fe-default-rtdb.firebaseio.com/",
   projectId: "agrisetu-479fe",
