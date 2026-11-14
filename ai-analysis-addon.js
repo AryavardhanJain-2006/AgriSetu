@@ -30,80 +30,96 @@
     return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   }
 function detectRole() {
-    // First check the role displayed by the existing dashboard
-    const dashboardText = [
-        document.querySelector(".side-brand .sub")?.innerText || "",
-        document.querySelector(".app-top")?.innerText || ""
-    ].join(" ").toLowerCase();
+    const email = localStorage.getItem("agrisetuUser");
 
-    if (/cold\s*storage/.test(dashboardText)) {
-        return "Cold Storage";
-    }
+    if (!email) return "";
 
-    if (/farmer/.test(dashboardText)) {
-        return "Farmer";
-    }
-
-    if (/buyer/.test(dashboardText)) {
-        return "Buyer";
-    }
-
-    if (/travel\s*partner|porter/.test(dashboardText)) {
-        return "Travel Partner";
-    }
-
-    return "";
+    return (
+        localStorage.getItem("agrisetuRole_" + email) || ""
+    ).trim();
 }
-  function addControls() {
-    // Add a persistent entry point on every authenticated app page. This avoids
-    // depending on page-heading text, which differs between Farmer and Storage.
+ function addControls() {
     const app = document.querySelector(".app-shell");
-    if (!app) return;
     const role = detectRole();
+    const sessionActive =
+        sessionStorage.getItem("agrisetuSession") === "true";
 
-if (role !== "Farmer" && role !== "Cold Storage") {
-    document.getElementById("agri-ai-main-launch")?.remove();
+    // Remove AI controls outside an authenticated Farmer/Cold Storage session
+    if (
+        !app ||
+        !sessionActive ||
+        !["Farmer", "Cold Storage"].includes(role)
+    ) {
+        document.getElementById("agri-ai-main-launch")?.remove();
 
-    document.querySelectorAll(".agri-ai-batch-launch").forEach(button => {
-        button.remove();
-    });
+        document.querySelectorAll(".agri-ai-batch-launch").forEach(button => {
+            button.remove();
+        });
 
-    return;
-}
+        return;
+    }
 
     let button = document.getElementById("agri-ai-main-launch");
+
     if (!button) {
-      button = document.createElement("button");
-      button.id = "agri-ai-main-launch";
-      button.className = "agri-ai-launch agri-ai-floating-launch";
-      button.type = "button";
-      button.setAttribute("aria-label", "Open AI Produce Analysis");
-      button.innerHTML = '<span aria-hidden="true">✦</span> AI Produce Analysis';
-      button.addEventListener("click", () => openModal({
-        role: detectRole(), crop: "", batchId: ""
-      }));
-      document.body.appendChild(button);
+        button = document.createElement("button");
+        button.id = "agri-ai-main-launch";
+        button.className = "agri-ai-launch agri-ai-floating-launch";
+        button.type = "button";
+        button.setAttribute("aria-label", "Open AI Produce Analysis");
+        button.innerHTML =
+            '<span aria-hidden="true">✦</span> AI Produce Analysis';
+
+        button.addEventListener("click", () => {
+            const currentRole = detectRole();
+
+            if (!["Farmer", "Cold Storage"].includes(currentRole)) {
+                button.remove();
+                return;
+            }
+
+            openModal({
+                role: currentRole,
+                crop: "",
+                batchId: ""
+            });
+        });
+
+        document.body.appendChild(button);
     }
 
-    // Add a contextual shortcut to monitoring cards when the current app
-    // provides identifiable batch cards. This is optional; the main button works
-    // independently of the app's card markup.
-    document.querySelectorAll(".monitoring-card[data-monitor-batch]").forEach(card => {
-      if (card.querySelector(".agri-ai-batch-launch")) return;
-      const heading = card.querySelector("h2")?.textContent || "";
-      const crop = heading.split("·")[0].trim();
-      const batchId = card.getAttribute("data-monitor-batch") || "";
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = "btn btn-outline agri-ai-batch-launch";
-      btn.textContent = "Scan / Analyse this produce";
-      btn.addEventListener("click", () => openModal({
-        role: detectRole(), crop, batchId
-      }));
-      (card.querySelector(".section-header") || card).appendChild(btn);
-    });
-  }
+    document.querySelectorAll(
+        ".monitoring-card[data-monitor-batch]"
+    ).forEach(card => {
+        if (card.querySelector(".agri-ai-batch-launch")) return;
 
+        const heading = card.querySelector("h2")?.textContent || "";
+        const crop = heading.split("·")[0].trim();
+        const batchId = card.getAttribute("data-monitor-batch") || "";
+
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "btn btn-outline agri-ai-batch-launch";
+        btn.textContent = "Scan / Analyse this produce";
+
+        btn.addEventListener("click", () => {
+            const currentRole = detectRole();
+
+            if (!["Farmer", "Cold Storage"].includes(currentRole)) {
+                return;
+            }
+
+            openModal({
+                role: currentRole,
+                crop,
+                batchId
+            });
+        });
+
+        (card.querySelector(".section-header") || card)
+            .appendChild(btn);
+    });
+}
   function ensureModal() {
     if (document.getElementById("agri-ai-modal")) return;
     const modal = document.createElement("div");
