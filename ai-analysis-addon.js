@@ -30,14 +30,26 @@
     return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   }
 
-  function detectRole() {
-    // The existing app renders the role in the sidebar brand subtitle and top bar.
-    const text = [
-      document.querySelector(".side-brand .sub")?.innerText || "",
-      document.querySelector(".app-top")?.innerText || ""
-    ].join(" ");
-    return /cold\s*storage/i.test(text) ? "Cold Storage" : "Farmer";
-  }
+ function detectRole() {
+    const email = localStorage.getItem("agrisetuUser");
+
+    if (!email) return "";
+
+    let role = localStorage.getItem("agrisetuRole_" + email) || "";
+
+    if (!role) {
+        try {
+            const account = JSON.parse(
+                localStorage.getItem("agrisetuAccount_" + email) || "{}"
+            );
+            role = account.role || "";
+        } catch (error) {
+            role = "";
+        }
+    }
+
+    return String(role).trim();
+}
 
   function addControls() {
     // Add a persistent entry point on every authenticated app page. This avoids
