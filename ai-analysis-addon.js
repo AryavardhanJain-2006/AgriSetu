@@ -56,6 +56,17 @@
     // depending on page-heading text, which differs between Farmer and Storage.
     const app = document.querySelector(".app-shell");
     if (!app) return;
+    const role = detectRole();
+
+if (role !== "Farmer" && role !== "Cold Storage") {
+    document.getElementById("agri-ai-main-launch")?.remove();
+
+    document.querySelectorAll(".agri-ai-batch-launch").forEach(button => {
+        button.remove();
+    });
+
+    return;
+}
 
     let button = document.getElementById("agri-ai-main-launch");
     if (!button) {
