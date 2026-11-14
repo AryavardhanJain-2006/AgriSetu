@@ -1,8 +1,112 @@
-crop,display_name,base_shelf_life_days,ideal_temperature_c,ideal_humidity_percent,fresh_multiplier,slightly_aged_multiplier,aging_multiplier,spoiling_multiplier
-tomato,Tomato,7,12,90,1.0,0.75,0.5,0.2
-potato,Potato,30,10,90,1.0,0.8,0.55,0.25
-onion,Onion,45,5,65,1.0,0.8,0.55,0.25
-capsicum,Capsicum,10,8,90,1.0,0.75,0.5,0.2
-carrot,Carrot,21,1,95,1.0,0.8,0.55,0.25
-cucumber,Cucumber,8,10,95,1.0,0.75,0.5,0.2
-cauliflower,Cauliflower,7,2,95,1.0,0.75,0.5,0.2
+{
+  "model": "MobileNetV2 ImageNet via TensorFlow.js (browser-side demo classifier)",
+  "disclaimer": "Shelf-life values are editable demonstration estimates, not validated food-safety predictions. Image appearance cannot establish internal quality or safe consumption.",
+  "crops": {
+    "tomato": {
+      "displayName": "Tomato",
+      "baseShelfLifeDays": 7,
+      "temperatureC": 12,
+      "humidityPercent": 90,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.75,
+        "aging": 0.5,
+        "spoiling": 0.2
+      },
+      "keywords": [
+        "tomato"
+      ]
+    },
+    "potato": {
+      "displayName": "Potato",
+      "baseShelfLifeDays": 30,
+      "temperatureC": 10,
+      "humidityPercent": 90,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.8,
+        "aging": 0.55,
+        "spoiling": 0.25
+      },
+      "keywords": [
+        "potato"
+      ]
+    },
+    "onion": {
+      "displayName": "Onion",
+      "baseShelfLifeDays": 45,
+      "temperatureC": 5,
+      "humidityPercent": 65,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.8,
+        "aging": 0.55,
+        "spoiling": 0.25
+      },
+      "keywords": [
+        "onion"
+      ]
+    },
+    "capsicum": {
+      "displayName": "Capsicum",
+      "baseShelfLifeDays": 10,
+      "temperatureC": 8,
+      "humidityPercent": 90,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.75,
+        "aging": 0.5,
+        "spoiling": 0.2
+      },
+      "keywords": [
+        "bell pepper",
+        "pepper"
+      ]
+    },
+    "carrot": {
+      "displayName": "Carrot",
+      "baseShelfLifeDays": 21,
+      "temperatureC": 1,
+      "humidityPercent": 95,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.8,
+        "aging": 0.55,
+        "spoiling": 0.25
+      },
+      "keywords": [
+        "carrot"
+      ]
+    },
+    "cucumber": {
+      "displayName": "Cucumber",
+      "baseShelfLifeDays": 8,
+      "temperatureC": 10,
+      "humidityPercent": 95,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.75,
+        "aging": 0.5,
+        "spoiling": 0.2
+      },
+      "keywords": [
+        "cucumber"
+      ]
+    },
+    "cauliflower": {
+      "displayName": "Cauliflower",
+      "baseShelfLifeDays": 7,
+      "temperatureC": 2,
+      "humidityPercent": 95,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.75,
+        "aging": 0.5,
+        "spoiling": 0.2
+      },
+      "keywords": [
+        "cauliflower"
+      ]
+    }
+  }
+}
