@@ -38,27 +38,30 @@ function detectRole() {
         localStorage.getItem("agrisetuRole_" + email) || ""
     ).trim();
 }
- function addControls() {
+function addControls() {
     const app = document.querySelector(".app-shell");
     const role = detectRole();
+
     const sessionActive =
         sessionStorage.getItem("agrisetuSession") === "true";
 
-    // Remove AI controls outside an authenticated Farmer/Cold Storage session
-    if (
-        !app ||
-        !sessionActive ||
-        !["Farmer", "Cold Storage"].includes(role)
-    ) {
+    const allowed =
+        app &&
+        sessionActive &&
+        ["Farmer", "Cold Storage"].includes(role);
+
+    // Hide button and shortcuts on landing page or restricted accounts
+    if (!allowed) {
         document.getElementById("agri-ai-main-launch")?.remove();
 
-        document.querySelectorAll(".agri-ai-batch-launch").forEach(button => {
-            button.remove();
+        document.querySelectorAll(".agri-ai-batch-launch").forEach(btn => {
+            btn.remove();
         });
 
         return;
     }
 
+    // Create main AI button if it does not exist
     let button = document.getElementById("agri-ai-main-launch");
 
     if (!button) {
@@ -66,7 +69,6 @@ function detectRole() {
         button.id = "agri-ai-main-launch";
         button.className = "agri-ai-launch agri-ai-floating-launch";
         button.type = "button";
-        button.setAttribute("aria-label", "Open AI Produce Analysis");
         button.innerHTML =
             '<span aria-hidden="true">✦</span> AI Produce Analysis';
 
@@ -88,6 +90,7 @@ function detectRole() {
         document.body.appendChild(button);
     }
 
+    // Add shortcuts to monitoring cards
     document.querySelectorAll(
         ".monitoring-card[data-monitor-batch]"
     ).forEach(card => {
@@ -105,9 +108,7 @@ function detectRole() {
         btn.addEventListener("click", () => {
             const currentRole = detectRole();
 
-            if (!["Farmer", "Cold Storage"].includes(currentRole)) {
-                return;
-            }
+            if (!["Farmer", "Cold Storage"].includes(currentRole)) return;
 
             openModal({
                 role: currentRole,
@@ -465,18 +466,52 @@ function detectRole() {
     document.body.appendChild(a); a.click(); a.remove(); URL.revokeObjectURL(url);
   }
 
-  const observer = new MutationObserver(() => addControls());
-  function init() {
+const observer = new MutationObserver(() => addControls());
+
+function monitorNavigation() {
+    const originalPushState = history.pushState;
+    const originalReplaceState = history.replaceState;
+
+    history.pushState = function (...args) {
+        const result = originalPushState.apply(this, args);
+        addControls();
+        return result;
+    };
+
+    history.replaceState = function (...args) {
+        const result = originalReplaceState.apply(this, args);
+        addControls();
+        return result;
+    };
+
+    window.addEventListener("popstate", addControls);
+    window.addEventListener("hashchange", addControls);
+
+    // Detect navigation that changes the dashboard without changing the URL
+    document.addEventListener("click", () => {
+        setTimeout(addControls, 100);
+        setTimeout(addControls, 400);
+    });
+}
+
+function init() {
     if (!document.querySelector('link[data-agrisetu-ai-addon="true"]')) {
-      const css = document.createElement("link");
-      css.rel = "stylesheet";
-      css.href = "ai-analysis-addon.css";
-      css.dataset.agrisetuAiAddon = "true";
-      document.head.appendChild(css);
+        const css = document.createElement("link");
+        css.rel = "stylesheet";
+        css.href = "ai-analysis-addon.css";
+        css.dataset.agrisetuAiAddon = "true";
+        document.head.appendChild(css);
     }
-    observer.observe(document.body, { childList: true, subtree: true });
+
+    monitorNavigation();
+
+    observer.observe(document.body, {
+        childList: true,
+        subtree: true
+    });
+
     addControls();
-  }
+}
   if (document.readyState === "loading") document.addEventListener("DOMContentLoaded", init);
   else init();
 })();
