@@ -29,28 +29,31 @@
   function escapeHTML(value) {
     return String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
   }
+function detectRole() {
+    // First check the role displayed by the existing dashboard
+    const dashboardText = [
+        document.querySelector(".side-brand .sub")?.innerText || "",
+        document.querySelector(".app-top")?.innerText || ""
+    ].join(" ").toLowerCase();
 
- function detectRole() {
-    const email = localStorage.getItem("agrisetuUser");
-
-    if (!email) return "";
-
-    let role = localStorage.getItem("agrisetuRole_" + email) || "";
-
-    if (!role) {
-        try {
-            const account = JSON.parse(
-                localStorage.getItem("agrisetuAccount_" + email) || "{}"
-            );
-            role = account.role || "";
-        } catch (error) {
-            role = "";
-        }
+    if (/cold\s*storage/.test(dashboardText)) {
+        return "Cold Storage";
     }
 
-    return String(role).trim();
-}
+    if (/farmer/.test(dashboardText)) {
+        return "Farmer";
+    }
 
+    if (/buyer/.test(dashboardText)) {
+        return "Buyer";
+    }
+
+    if (/travel\s*partner|porter/.test(dashboardText)) {
+        return "Travel Partner";
+    }
+
+    return "";
+}
   function addControls() {
     // Add a persistent entry point on every authenticated app page. This avoids
     // depending on page-heading text, which differs between Farmer and Storage.
