@@ -47,3 +47,22 @@
 
 .agri-ai-detection-status{display:block;margin-top:7px;color:#64748b;font-size:13px;line-height:1.45}
 .agri-ai-detected-crop{border:1px solid #d5e0d9;border-radius:9px;padding:11px 12px;background:#f5faf6;color:#176b45;font-weight:800;min-height:42px;display:flex;align-items:center}
+.agri-ai-label select {
+    width: 100%;
+    min-height: 58px;
+    padding: 12px 20px;
+    border: 1px solid #d5e0d9;
+    border-radius: 15px;
+    background-color: #ffffff;
+    color: #203a2e;
+    font-size: 18px;
+    font-weight: 600;
+    cursor: pointer;
+    box-sizing: border-box;
+    outline: none;
+}
+
+.agri-ai-label select:focus {
+    border-color: #16a34a;
+    box-shadow: 0 0 0 2px rgba(22, 163, 74, 0.10);
+}
