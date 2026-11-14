@@ -1,0 +1,112 @@
+{
+  "model": "MobileNetV2 ImageNet via TensorFlow.js (browser-side demo classifier)",
+  "disclaimer": "Shelf-life values are editable demonstration estimates, not validated food-safety predictions. Image appearance cannot establish internal quality or safe consumption.",
+  "crops": {
+    "tomato": {
+      "displayName": "Tomato",
+      "baseShelfLifeDays": 7,
+      "temperatureC": 12,
+      "humidityPercent": 90,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.75,
+        "aging": 0.5,
+        "spoiling": 0.2
+      },
+      "keywords": [
+        "tomato"
+      ]
+    },
+    "potato": {
+      "displayName": "Potato",
+      "baseShelfLifeDays": 30,
+      "temperatureC": 10,
+      "humidityPercent": 90,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.8,
+        "aging": 0.55,
+        "spoiling": 0.25
+      },
+      "keywords": [
+        "potato"
+      ]
+    },
+    "onion": {
+      "displayName": "Onion",
+      "baseShelfLifeDays": 45,
+      "temperatureC": 5,
+      "humidityPercent": 65,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.8,
+        "aging": 0.55,
+        "spoiling": 0.25
+      },
+      "keywords": [
+        "onion"
+      ]
+    },
+    "capsicum": {
+      "displayName": "Capsicum",
+      "baseShelfLifeDays": 10,
+      "temperatureC": 8,
+      "humidityPercent": 90,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.75,
+        "aging": 0.5,
+        "spoiling": 0.2
+      },
+      "keywords": [
+        "bell pepper",
+        "pepper"
+      ]
+    },
+    "carrot": {
+      "displayName": "Carrot",
+      "baseShelfLifeDays": 21,
+      "temperatureC": 1,
+      "humidityPercent": 95,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.8,
+        "aging": 0.55,
+        "spoiling": 0.25
+      },
+      "keywords": [
+        "carrot"
+      ]
+    },
+    "cucumber": {
+      "displayName": "Cucumber",
+      "baseShelfLifeDays": 8,
+      "temperatureC": 10,
+      "humidityPercent": 95,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.75,
+        "aging": 0.5,
+        "spoiling": 0.2
+      },
+      "keywords": [
+        "cucumber"
+      ]
+    },
+    "cauliflower": {
+      "displayName": "Cauliflower",
+      "baseShelfLifeDays": 7,
+      "temperatureC": 2,
+      "humidityPercent": 95,
+      "visualAdjustments": {
+        "fresh": 1.0,
+        "slightly_aged": 0.75,
+        "aging": 0.5,
+        "spoiling": 0.2
+      },
+      "keywords": [
+        "cauliflower"
+      ]
+    }
+  }
+}
