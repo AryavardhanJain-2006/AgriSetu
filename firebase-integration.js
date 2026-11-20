@@ -340,6 +340,53 @@
     const temperature = Number(reading.temperature);
     const humidity = Number(reading.humidity);
     const methane = Number(reading.methane_ppm);
+    
+// ==========================================
+// AGRISETU: HIGH TEMPERATURE ALERT SYSTEM
+// ==========================================
+
+if (!window.agrisetuTemperatureAlertState) {
+    window.agrisetuTemperatureAlertState = {};
+}
+
+const alertKey = String(facilityId);
+const HIGH_TEMP_LIMIT = 40;
+const RESET_TEMP_LIMIT = 39;
+
+if (Number.isFinite(temperature)) {
+
+    // Trigger only once while temperature remains above 40°C
+    if (temperature > HIGH_TEMP_LIMIT &&
+        !window.agrisetuTemperatureAlertState[alertKey]) {
+
+        window.agrisetuTemperatureAlertState[alertKey] = true;
+
+        const alertTitle = "CRITICAL: High Storage Temperature!";
+        const alertMessage =
+            `Temperature at ${facilityId} has reached ${temperature.toFixed(1)}°C. ` +
+            "It has exceeded the safe alert threshold of 40°C. " +
+            "Check the cooling system immediately to protect stored produce.";
+
+        if (typeof addNotification === "function") {
+            addNotification(
+                alertTitle,
+                alertMessage,
+                "warning",
+                true
+            );
+        } else {
+            console.warn(alertTitle, alertMessage);
+        }
+
+        console.warn("AgriSetu temperature alert:", alertMessage);
+    }
+
+    // Re-arm the alert after temperature falls to 39°C or below
+    if (temperature <= RESET_TEMP_LIMIT) {
+        window.agrisetuTemperatureAlertState[alertKey] = false;
+    }
+}
+
     if (![temperature, humidity, methane].every(Number.isFinite)) return;
 
     setText(`firebase-temperature-${suffix}`, `${temperature.toFixed(1)} °C`);
